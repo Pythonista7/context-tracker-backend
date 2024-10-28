@@ -77,7 +77,7 @@ class ContextStorage:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT id FROM contexts ORDER BY last_active DESC LIMIT 1")
-            context_id = cursor.fetchone()
+            context_id = cursor.fetchone()[0]
             logger.info(f"Last active context: {context_id}")
             if context_id:
                 return self.get_context(context_id)

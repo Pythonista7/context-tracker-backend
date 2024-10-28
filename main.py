@@ -1,17 +1,28 @@
+from datetime import datetime
 from context_tracker import ContextTracker
+from data import Context
 from storage import ContextStorage
 
 
 # Example usage:
 async def main():
     storage = ContextStorage()
-    tracker = ContextTracker(context_storage=storage)
+    # Create a context
+    current_context = storage.get_last_active_context()
+    if current_context is None:
+        current_context = Context(id="learning", name="learning",color="#000000", description="Learning new things", last_active=datetime.now())
+        storage.save_context(current_context)
+
+    tracker = ContextTracker(
+        context=current_context,
+        context_storage=storage
+    )
 
     # Switch context
     # TODO: tracker.switch_context('learning')
 
     # Run a capture cycle
-    note_path = await tracker.run_capture_cycle(context=tracker.current_context)
+    note_path = await tracker.run_capture_cycle()
     print(f"Created note: {note_path}")
 
 

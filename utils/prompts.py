@@ -30,15 +30,15 @@ DEFAULT_PROMPTS = {
 {{context}}
 Given the following information about the previous screen capture:
 {{previous_analysis}}
-Analyze this screenshot and identify the required information as mentioned below and format response as JSON with these exact keys: 
+Focusing on new information only, do not repeat previously known info, Analyze this screenshot and identify the required information as mentioned below and format response as JSON with these exact keys: 
         {generate_schema_description(ScreenCaptureData)}
         
 Note: 
-        - DO NOT make up any information.
-        - DO NOT output a markdown block of json, just the json ONLY.
-        - If you cannot identify any of the information, set the value to null.
-        - Always stick to the schema described above. If you cannot identify a field, set the value to null or an appropriate default value if null is not an option.
-        """
+    - DO NOT make up any information.
+    - DO NOT output a markdown block of json, just the json ONLY.
+    - If you cannot identify any of the new information, set the value to null.
+    - Always stick to the schema described above. If you cannot identify a field, set the value to null or an appropriate default value if null is not an option.
+"""
     ),
     "context_switch": AnalysisPrompt(
         system_context=DEFAULT_VISION_SYSTEM_CONTEXT,

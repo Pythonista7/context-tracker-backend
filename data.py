@@ -22,6 +22,6 @@ class Context(BaseModel):
     id: str
     name: str 
     color: str
+    description: str = Field(default="",description="A short description of the context.")
     last_active: datetime = Field(default_factory=datetime.now)
-    notes: List[str] = Field(default_factory=list)
-    resources: List[str] = Field(default_factory=list)
+    

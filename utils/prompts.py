@@ -26,11 +26,14 @@ Provide structured, accurate analysis without any subjective interpretation.
 DEFAULT_PROMPTS = {
     "screen_activity_observation": AnalysisPrompt(
         system_context=DEFAULT_VISION_SYSTEM_CONTEXT,
-        template=f"""
-        Analyze this screenshot and identify the required information as mentioned below and format response as JSON with these exact keys: 
+        template=f"""In the following context:
+{{context}}
+Given the following information about the previous screen capture:
+{{previous_analysis}}
+Analyze this screenshot and identify the required information as mentioned below and format response as JSON with these exact keys: 
         {generate_schema_description(ScreenCaptureData)}
         
-        Note: 
+Note: 
         - DO NOT make up any information.
         - DO NOT output a markdown block of json, just the json ONLY.
         - If you cannot identify any of the information, set the value to null.

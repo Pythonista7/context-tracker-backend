@@ -7,6 +7,9 @@ from dataclasses import asdict
 
 from constants import CONTEXT_PATH
 from data import Context
+from logging import getLogger
+
+logger = getLogger(__name__)
 
 class ContextStorage:
     def __init__(self, db_path: str = f"{CONTEXT_PATH}/context.db"):
@@ -25,6 +28,7 @@ class ContextStorage:
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
                     color TEXT NOT NULL,
+                    description TEXT,
                     last_active TIMESTAMP NOT NULL
                 )
             """)
@@ -62,38 +66,31 @@ class ContextStorage:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT OR REPLACE INTO contexts (id, name, color, last_active)
-                VALUES (?, ?, ?, ?)
-            """, (context.id, context.name, context.color, context.last_active))
-            
-            # Save associated notes and resources
-            # if context.notes or context.resources:
-            #     context_id = context.id
-                
-            #     # Save notes
-            #     for note in context.notes:
-            #         cursor.execute("""
-            #             INSERT INTO context_info (context_id, note)
-            #             VALUES (?, ?)
-            #         """, (context_id, note))
-                
-            #     # Save resources
-            #     for resource in context.resources:
-            #         cursor.execute("""
-            #             INSERT INTO context_info (context_id, resource)
-            #             VALUES (?, ?)
-            #         """, (context_id, resource))
+                INSERT OR REPLACE INTO contexts (id, name, color, description, last_active)
+                VALUES (?, ?, ?, ?, ?)
+            """, (context.id, context.name, context.color, context.description, context.last_active))
             
             conn.commit()
 
-    def get_context(self, context_id: str) -> Optional[dict]:
+    def get_last_active_context(self) -> Optional[Context]:
+        """Retrieve the last active context"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM contexts ORDER BY last_active DESC LIMIT 1")
+            context_id = cursor.fetchone()
+            logger.info(f"Last active context: {context_id}")
+            if context_id:
+                return self.get_context(context_id)
+            return None
+
+    def get_context(self, context_id: str) -> Optional[Context]:
         """Retrieve a context and its associated info"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             
             # Get context
             cursor.execute("""
-                SELECT id, name, color, last_active
+                SELECT id, name, color, description, last_active
                 FROM contexts
                 WHERE id = ?
             """, (context_id,))
@@ -101,30 +98,14 @@ class ContextStorage:
             context_row = cursor.fetchone()
             if not context_row:
                 return None
-                
-            # Get associated notes and resources
-            cursor.execute("""
-                SELECT note, resource
-                FROM context_info
-                WHERE context_id = ?
-            """, (context_id,))
             
-            notes = []
-            resources = []
-            for note, resource in cursor.fetchall():
-                if note:
-                    notes.append(note)
-                if resource:
-                    resources.append(resource)
-            
-            return {
-                "id": context_row[0],
-                "name": context_row[1],
-                "color": context_row[2],
-                "last_active": datetime.fromisoformat(context_row[3]),
-                "notes": notes,
-                "resources": resources
-            }
+            return Context( 
+                id = context_row[0],
+                name = context_row[1],
+                color = context_row[2],
+                description = context_row[3],
+                last_active = datetime.fromisoformat(context_row[4]),  
+            )
 
     def get_all_contexts(self) -> List[dict]:
         """Retrieve all contexts"""

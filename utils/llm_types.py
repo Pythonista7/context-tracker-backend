@@ -12,9 +12,9 @@ class AnalysisPrompt:
     template: str
     system_context: Optional[str] = None
 
-    def format(self, **kwargs) -> str:
-        return self.template.format(**kwargs)
-
+    def format(self, **kwargs) -> 'AnalysisPrompt':
+        self.template = self.template.format(**kwargs)
+        return self
 
 class LLMProvider(ABC):
     """Abstract base class for LLM providers"""

@@ -13,7 +13,7 @@ logger = getLogger(__name__)
 
 @LLMProviderFactory.register("openai")
 class OpenAIProvider(LLMProvider):
-    def __init__(self, api_key: str, vision_model: str = "gpt-4o-mini",
+    def __init__(self, api_key: str, vision_model: str = "gpt-4o",
                  text_model: str = "gpt-4"):
         self.api_key = api_key
         openai.api_key = api_key
@@ -62,7 +62,7 @@ class OpenAIProvider(LLMProvider):
                 messages.append({"role": "system", "content": system_context})
             messages.append({"role": "user", "content": prompt})
 
-            response = await openai.chat.completions.create(
+            response = openai.chat.completions.create(
                 model=self.text_model,
                 messages=messages
             )

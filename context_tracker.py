@@ -7,29 +7,34 @@ from typing import Dict, Optional, List
 from logging import getLogger
 from PIL import Image
 from constants import CONTEXT_PATH, OBSIDIAN_PATH
-from data import Context, ScreenCaptureData
+from context import Context
+from data import ContextData, ScreenCaptureData, SessionSummary
 from llm_providers.openai_provider import OpenAIProvider
 from screen_capture import ScreenCapture, ScreenCaptureFactory
+from session import Session
 from storage import ContextStorage
 from utils.llm_types import LLMProvider, AnalysisPrompt
 from utils.prompts import PromptsManager
 from logging import getLogger
 from pydantic import BaseModel, Field, ValidationError
 
+from utils.utils import parse_json_string_to_model
+
 logger = getLogger(__name__)
 
 class ContextTracker:
-    CONTEXT_FILE = CONTEXT_PATH / "contexts.json"
 
     def __init__(
         self, 
+        session: Session,
+        context: ContextData,
         base_dir: str = OBSIDIAN_PATH,
         llm_provider: LLMProvider = OpenAIProvider(
             api_key=os.getenv("OPENAI_API_KEY")
         ),
         context_storage: ContextStorage = None,
         custom_prompts: Dict[str, AnalysisPrompt] = None,
-        screen_capture: Optional[ScreenCapture] = None
+        screen_capture: Optional[ScreenCapture] = None,
     ):
         self.base_dir = Path(base_dir).expanduser()
         self.llm = llm_provider
@@ -37,14 +42,11 @@ class ContextTracker:
         self.screen_capture = screen_capture or ScreenCaptureFactory.create("pyautogui")
         # TODO: self.setup_directories() # This is for the obsidian vault
         
-        if context_storage is None:
-            raise ValueError("Context storage is required")
-        
         self.storage = context_storage
-        
-        # Initialize current context last to ensure all dependencies are set up
-        self._current_context = None
-        self._load_current_context()
+
+        self.session = session 
+
+        self._current_context = context
 
     def capture_screen(self) -> Image.Image:
         """
@@ -57,52 +59,11 @@ class ContextTracker:
             raise
     
     @property
-    def current_context(self) -> Context:
+    def current_context(self) -> ContextData:
         """Get current context with lazy initialization"""
-        if self._current_context is None:
-            self._load_current_context()
         return self._current_context
     
-    def _load_current_context(self) -> None:
-        """
-        Load current context from interface file, falling back to defaults if not found
-        """
-        try:
-            current = self.storage.get_last_active_context()
-            if current:
-                self._current_context = Context(
-                    id=current.id,
-                    name=current.name,
-                    description=current.description,
-                    color=current.color,
-                    last_active=current.last_active
-                )
-                logger.info(f"Loaded context : {current['id']}")
-                return
-            else:
-                logger.error("No current context found in DB, using default")
-                self._current_context = Context(
-                    id='work',
-                    name='work',
-                    description='Default context',
-                    color='#FF6B6B',
-                    last_active=datetime.now()
-                )
-        except Exception as e:
-            logger.warning(f"Failed to load previous context : {e}")
-        
-        # Fall back to default if file doesn't exist or no current context found
-        self._current_context = Context(
-            id='work',
-            name='work',
-            color='#FF6B6B',
-            last_active=datetime.now(),
-            notes=[],
-            resources=[]
-        )
-        logger.debug("Initialized default context: work")
-
-    async def analyze_screen(self, image: Image,context: Context, previous_analysis: Optional[ScreenCaptureData] = None) -> Optional[ScreenCaptureData]:
+    async def analyze_screen(self, image: Image,context: ContextData, previous_analysis: Optional[ScreenCaptureData] = None) -> Optional[ScreenCaptureData]:
         """Analyze screen content using configured LLM provider"""
         try:
             prompt = self.prompts.get_prompt("screen_activity_observation").format(
@@ -113,12 +74,7 @@ class ContextTracker:
             logger.debug(f"Analyzing screen with {self.llm.provider_name}")
             
             result = await self.llm.analyze_image(image, prompt)
-            
-            try:
-                result = ScreenCaptureData(**result)
-            except ValidationError as e:
-                logger.error(f"Invalid response format: {e}")
-                raise ValueError(f"Invalid response format: {e}")
+            result = ScreenCaptureData(**result)
             
             logger.info(f"Screen analysis complete: {result.main_topic} - important:{result.is_learning_moment}")
             return result
@@ -134,33 +90,52 @@ class ContextTracker:
             logger.error(f"Screen analysis failed with {self.llm.provider_name}: {str(e)}")
             return None
     
-    def persist_context_info(self, context_id: str, analysis: ScreenCaptureData) -> Optional[str]:
+    def persist_event(self, analysis: ScreenCaptureData) -> None:
         """Persist context information to Sqlite DB"""
         # overwrite the context_id with the current context id
-        analysis.context_id = context_id
+        analysis.context_id = self.current_context.id
         analysis.created_at = datetime.now()
+        analysis.session_id = self.session.session_id
         try:
-            self.storage.save_context_info(**analysis.model_dump())
-            return analysis
+            self.storage.save_event(**analysis.serialize())
+            return
         except Exception as e:
             logger.error(f"Failed to persist context info: {e}")
-            return None
-        
-    async def run_capture_cycle(self,context: Context, interval: int = 30):
+            return
+    
+    def start_session(self) -> Optional[int]:
+        """Start a new session and return its ID"""
+        return self.session.start()
+    
+    async def end_session(self) -> None:
+        """End a session and optionally add a summary"""
+        await self.session.summarize_and_save()
+
+    async def run_capture_cycle(self, interval: int = 30):
+        context = self.current_context
         previous_analysis = None
-        while True:
+        
+        if self.session is None:
+            raise ValueError("Session is not set, please set a session before running capture cycle")
+
+        session_id = self.start_session()
+        logger.info(f"Started session with id: {session_id} for context: {context.id} at {datetime.now()}")
+        
+        while self.session.is_active():
             """Run one capture cycle"""
+            logger.debug(f"Running capture cycle for context: {context.id} , session: {session_id} at {datetime.now()}")
             image = self.capture_screen()
 
+            logger.debug(f"Storing event for context: {context.id} , session: {session_id} at {datetime.now()}")
             # Analyze current activity
             analysis = await self.analyze_screen(image=image, context=context,previous_analysis=previous_analysis)
             if analysis is None:
                 logger.error("Screen analysis failed, skipping capture cycle for timestamp: %s", datetime.now())
             else:
                 print(f"Persisting context info for {self.current_context}\n {analysis}")
-                previous_analysis = self.persist_context_info(
-                    self.current_context.id, 
-                    analysis
-                )
-                break # TODO: remove this after debugging
+                previous_analysis = self.persist_event(analysis)
+                # break # TODO: remove this after debugging
+            logger.debug(f"Sleeping for {interval} seconds at {datetime.now()}")
             await asyncio.sleep(interval)
+        
+        logger.info(f"Ending session with id: {session_id} for context: {context.id} at {datetime.now()}")

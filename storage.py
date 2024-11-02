@@ -1,12 +1,12 @@
-
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 from dataclasses import asdict
+import time
 
 from constants import CONTEXT_PATH
-from data import Context
+from data import ContextData, SessionSummary
 from logging import getLogger
 
 logger = getLogger(__name__)
@@ -15,7 +15,33 @@ class ContextStorage:
     def __init__(self, db_path: str = f"{CONTEXT_PATH}/context.db"):
         self.db_path = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.timeout = 30.0
         self._init_db()
+
+    def _get_connection(self):
+        """Get a database connection with proper timeout and settings"""
+        return sqlite3.connect(
+            self.db_path,
+            timeout=self.timeout,
+            isolation_level='IMMEDIATE',
+            check_same_thread=False
+        )
+
+    def _execute_with_retry(self, query_func, max_retries=3):
+        """Execute a database operation with retry logic"""
+        for attempt in range(max_retries):
+            try:
+                with self._get_connection() as conn:
+                    return query_func(conn)
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e) and attempt < max_retries - 1:
+                    logger.warning(f"Database locked, retrying... ({attempt + 1}/{max_retries})")
+                    time.sleep(0.1 * (attempt + 1))  # Exponential backoff
+                    continue
+                raise
+            except Exception as e:
+                logger.error(f"Database error: {e}")
+                raise
 
     def _init_db(self):
         """Initialize database tables if they don't exist"""
@@ -25,19 +51,38 @@ class ContextStorage:
             # Create contexts table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS contexts (
-                    id TEXT PRIMARY KEY,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
                     name TEXT NOT NULL,
                     color TEXT NOT NULL,
                     description TEXT,
-                    last_active TIMESTAMP NOT NULL
+                    last_active TIMESTAMP NOT NULL,
+                    UNIQUE (name)
+                )
+            """)
+            
+            # Create new sessions table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    context_id TEXT NOT NULL,
+                    start_time TIMESTAMP NOT NULL,
+                    end_time TIMESTAMP,
+                    overview TEXT,
+                    key_topics TEXT,
+                    learning_highlights TEXT,
+                    resources_used TEXT,
+                    conclusion TEXT,
+                    FOREIGN KEY (context_id) REFERENCES contexts(id) ON DELETE CASCADE,
+                    UNIQUE (context_id, start_time)
                 )
             """)
 
-            # Create context_info table
+            # Create events table
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS context_info (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                CREATE TABLE IF NOT EXISTS events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
                     context_id TEXT NOT NULL,
+                    session_id INTEGER,
                     note TEXT,
                     resource TEXT,
                     main_topic TEXT,
@@ -45,23 +90,44 @@ class ContextStorage:
                     is_learning_moment BOOLEAN,
                     learning_observations TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (context_id) REFERENCES contexts(id)
+                    FOREIGN KEY (context_id) REFERENCES contexts(id) ON DELETE CASCADE,
+                    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL
                 )
             """)
+
+            
             
             conn.commit()
+            logger.info("Database initialized successfully.")
             
-    def save_context_info(self, context_id: str, notes: Optional[str], resources: Optional[str], main_topic: Optional[str], summary: Optional[str], is_learning_moment: Optional[bool], learning_observations: Optional[str],created_at: Optional[datetime]) -> None:
-        """Save or update a context info"""
-        with sqlite3.connect(self.db_path) as conn:
+    def save_event(self, context_id: str, session_id: Optional[int], notes: Optional[str], resources: Optional[str], main_topic: Optional[str], summary: Optional[str], is_learning_moment: Optional[bool], learning_observations: Optional[str], created_at: Optional[datetime]) -> None:
+        """Save or update an event"""
+        def _save(conn):
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT OR REPLACE INTO context_info (context_id, note, resource, main_topic, summary, is_learning_moment, learning_observations, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (context_id, notes, resources, main_topic, summary, is_learning_moment, "\n".join(learning_observations), created_at))
+                INSERT OR REPLACE INTO events (context_id, session_id, note, resource, main_topic, summary, 
+                                            is_learning_moment, learning_observations, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (context_id, session_id, notes, resources, main_topic, summary, 
+                 is_learning_moment, learning_observations, created_at))
             conn.commit()
+        self._execute_with_retry(_save)
+    
+    def create_context(self, context:ContextData) -> int:
+        """Create a new context and return the id"""
+        def _create(conn):
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO contexts (name, color, description, last_active)
+                VALUES ( ?, ?, ?, ?)
+                RETURNING id
+            """, (context.name, context.color, context.description, context.last_active))   
+            new_id = cursor.fetchone()[0]
+            conn.commit()
+            return new_id
+        return self._execute_with_retry(_create)
 
-    def save_context(self, context:Context) -> None:
+    def save_context(self, context:ContextData) -> None:
         """Save or update a context"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -72,7 +138,7 @@ class ContextStorage:
             
             conn.commit()
 
-    def get_last_active_context(self) -> Optional[Context]:
+    def get_last_active_context(self) -> Optional[ContextData]:
         """Retrieve the last active context"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -83,23 +149,31 @@ class ContextStorage:
                 return self.get_context(context_id)
             return None
 
-    def get_context(self, context_id: str) -> Optional[Context]:
+    def get_context(self, context_id: Optional[str] = None, name: Optional[str] = None) -> Optional[ContextData]:
         """Retrieve a context and its associated info"""
+        if not context_id and not name:
+            logger.error("No context_id or name provided!!")
+            return None
+        
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             
-            # Get context
-            cursor.execute("""
-                SELECT id, name, color, description, last_active
-                FROM contexts
-                WHERE id = ?
-            """, (context_id,))
+            if context_id:
+                query = "SELECT id, name, color, description, last_active FROM contexts WHERE id = ?"
+                params = (context_id,)
+            elif name:
+                query = "SELECT id, name, color, description, last_active FROM contexts WHERE name = ?"
+                params = (name,)
+            else:
+                return None
+            
+            cursor.execute(query, params)
             
             context_row = cursor.fetchone()
             if not context_row:
                 return None
             
-            return Context( 
+            return ContextData( 
                 id = context_row[0],
                 name = context_row[1],
                 color = context_row[2],
@@ -123,9 +197,48 @@ class ContextStorage:
         return contexts
 
     def delete_context(self, context_id: str) -> None:
-        """Delete a context and its associated info"""
+        """Delete a context (associated events and sessions will be deleted automatically)"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM context_info WHERE context_id = ?", (context_id,))
             cursor.execute("DELETE FROM contexts WHERE id = ?", (context_id,))
             conn.commit()
+
+    def create_session(self, context_id: str, start_time: datetime) -> int:
+        """Create a new session with retry logic"""
+        def _create(conn):
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO sessions (context_id, start_time)
+                VALUES (?, ?)
+                RETURNING id
+            """, (context_id, start_time))
+            new_id = cursor.fetchone()[0]
+            conn.commit()
+            return new_id
+        return self._execute_with_retry(_create)
+
+
+    def end_session_updating_summary(self, session_id: int, end_time: datetime, session_summary: SessionSummary) -> None:
+        """End a session and optionally add a summary"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE sessions 
+                SET end_time = ?, overview = ?, key_topics = ?, learning_highlights = ?, resources_used = ?, conclusion = ?
+                WHERE id = ?
+            """, (end_time, session_summary.overview, session_summary.key_topics, session_summary.learning_highlights, session_summary.resources_used, session_summary.conclusion, session_id))
+            conn.commit()
+    
+    def get_session(self, session_id: int) -> Optional[dict]:
+        """Retrieve a session and its associated info"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
+            return cursor.fetchone()
+    
+    def get_session_events(self, session_id: int) -> List[dict]:
+        """Retrieve all events associated with a session"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM events WHERE session_id = ?", (session_id,))
+            return cursor.fetchall()

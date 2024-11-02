@@ -61,6 +61,7 @@ class Session:
             session_summary = await self.generate_session_summary(self.session_id)
             logger.debug(f"Generated session summary: {session_summary}")
             self.storage.end_session_updating_summary(self.session_id, self.end_time, session_summary)
+            return session_summary
         except Exception as e:
             logger.error(f"Failed to end session: {e}")
     

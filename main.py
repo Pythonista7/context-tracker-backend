@@ -11,7 +11,7 @@ from storage import ContextStorage
 async def end_session(tracker: ContextTracker):
     await tracker.session._end_session_event.wait()
     print("Session ended! Generating summary...")
-    summary = await tracker.session.generate_session_summary(tracker.session.session_id)
+    summary = await tracker.session.summarize_and_save(tracker.session.session_id)
     print(f"Session summary: {summary}")
     with open("session_summary.json", "w") as f:
         json.dump(summary.model_dump_json(), f)

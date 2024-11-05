@@ -247,7 +247,7 @@ class ContextStorage:
 
     def create_session(self, context_id: str, start_time: datetime) -> int:
         """Create a new session with retry logic"""
-        def _create(conn):
+        def _create(conn) -> int:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO sessions (context_id, start_time)
@@ -268,7 +268,7 @@ class ContextStorage:
                 UPDATE sessions 
                 SET end_time = ?, overview = ?, key_topics = ?, learning_highlights = ?, resources_used = ?, conclusion = ?
                 WHERE id = ?
-            """, (end_time, session_summary.overview, session_summary.key_topics, session_summary.learning_highlights, session_summary.resources_used, session_summary.conclusion, session_id))
+            """, (end_time, session_summary.overview, "\n".join(session_summary.key_topics), "\n".join(session_summary.learning_highlights), "".join(session_summary.resources_used), session_summary.conclusion, session_id))
             conn.commit()
     
     def get_session(self, session_id: int) -> Optional[dict]:

@@ -3,8 +3,9 @@ from flask import Flask, jsonify, request, g
 import json
 import asyncio
 from functools import wraps
-from logging import getLogger
+from logging import getLogger, basicConfig, INFO
 from dataclasses import dataclass
+from typing import Dict
 
 from context import Context
 from context_tracker import ContextTracker
@@ -12,10 +13,20 @@ from data import ContextData
 from session import Session
 from storage import ContextStorage
 
+# Add this near the top of the file, after imports but before creating the Flask app
+basicConfig(
+    level=INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
 logger = getLogger(__name__)
 
 app = Flask(__name__)
 # storage = ContextStorage()  # Create singleton instance
+
+# Add after app initialization
+active_trackers: Dict[int, ContextTracker] = {}
 
 """
 API Request Models
@@ -76,6 +87,14 @@ async def start_session():
     tracker: ContextTracker = ContextTracker(context_storage=storage, context=context, session=session)
     asyncio.create_task(tracker.run_capture_cycle(interval=15))
     
+    # wait for session to start
+    while tracker.session.session_id is None:
+        logger.info("Waiting for session to start...")
+        await asyncio.sleep(1)
+    
+    # Store tracker instance
+    active_trackers[tracker.session.session_id] = tracker
+    
     return jsonify({
         'session_id': tracker.session.session_id,
         'context_id': data.context_id
@@ -84,25 +103,31 @@ async def start_session():
 @app.route('/session/<session_id>/end', methods=['POST'])
 @async_route
 async def end_session_api(session_id):
+    # Get the active tracker instance
+    session_id = int(session_id)
+    tracker = active_trackers.get(session_id)
+    if not tracker:
+        return jsonify({'error': f'Session {session_id} not found or already ended. Must be one of {active_trackers.keys()}'}), 404
+    
+    # End the session using the original tracker instance
+    await tracker.session.end()
+    
+    # Clean up the tracker reference
+    del active_trackers[session_id]
+    
+    # Get summary from storage after session end
     storage = ContextStorage()
-    
-    # Recreate session and tracker from stored data
-    session = await Session.load(storage=storage, session_id=session_id)
-    if not session:
-        return jsonify({'error': 'Session not found or already ended'}), 404
-    
-    context = Context(storage=storage, id=session.context_id)
-    tracker = ContextTracker(context_storage=storage, context=context, session=session)
-    
-    # End the session
-    tracker.session.end()
-    
-    # Wait for final capture and get summary
-    summary = await tracker.session.summarize_and_save(session_id)
+    session_data = storage.get_session(session_id)
     
     return jsonify({
         'session_id': session_id,
-        'summary': summary
+        'summary': {
+            'overview': session_data[4],
+            'key_topics': session_data[5],
+            'learning_highlights': session_data[6],
+            'resources_used': session_data[7],
+            'conclusion': session_data[8]
+        }
     })
 
 @app.route('/session/<session_id>', methods=['GET'])
@@ -124,6 +149,51 @@ async def get_session_events(session_id):
     events = storage.get_session_events(session_id)
     return jsonify(events)
 
+@app.route('/session/<session_id>/status', methods=['GET'])
+@async_route
+async def get_session_status(session_id):
+    # First check active trackers
+    tracker = active_trackers.get(session_id)
+    if tracker:
+        return jsonify({
+            'session_id': session_id,
+            'status': 'active',
+            'context_id': tracker.current_context.id,
+            'started_at': tracker.session.started_at.isoformat() if tracker.session.started_at else None
+        })
+    
+    # If not active, check storage for completed session
+    storage = ContextStorage()
+    session_data = storage.get_session(session_id)
+    
+    if session_data:
+        return jsonify({
+            'session_id': session_id,
+            'status': 'completed',
+            'context_id': session_data[1],  # Assuming context_id is second column
+            'started_at': session_data[2],  # Assuming started_at is third column
+            'ended_at': session_data[3]     # Assuming ended_at is fourth column
+        })
+    
+    return jsonify({
+        'error': 'Session not found'
+    }), 404
+
+@app.route('/sessions/active', methods=['GET'])
+@async_route
+async def list_active_sessions():
+    active_sessions = [{
+        'session_id': session_id,
+        'context_id': tracker.current_context.id,
+        'started_at': tracker.session.start_time.isoformat() if tracker.session.start_time else None,
+        'name': tracker.current_context.name
+    } for session_id, tracker in active_trackers.items()]
+    
+    return jsonify({
+        'active_sessions': active_sessions,
+        'count': len(active_sessions)
+    })
+
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({
@@ -133,4 +203,4 @@ def health_check():
     })
 
 if __name__ == "__main__":
-    app.run(debug=True) 
+    app.run(debug=True,port=5001) 

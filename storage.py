@@ -6,6 +6,7 @@ from dataclasses import asdict
 import time
 from contextlib import contextmanager
 import queue
+from flask import current_app, g
 
 from constants import CONTEXT_PATH
 from data import ContextData, SessionSummary
@@ -43,18 +44,30 @@ class ContextStorage:
         conn = sqlite3.connect(
             self.db_path,
             timeout=self.timeout,
-            isolation_level='IMMEDIATE'
+            isolation_level='IMMEDIATE',
+            check_same_thread=False  # Allow cross-thread usage
         )
         return conn
     
+    def _get_connection(self):
+        """Get connection for current context/thread"""
+        if 'db' not in g:
+            g.db = sqlite3.connect(
+                self.db_path,
+                timeout=self.timeout,
+                isolation_level='IMMEDIATE'
+            )
+        return g.db
+    
     @contextmanager
     def get_connection(self):
-        """Get a connection from the pool"""
-        connection = self._pool.get()
+        """Context manager for database connections"""
+        conn = self._get_connection()
         try:
-            yield connection
-        finally:
-            self._pool.put(connection)
+            yield conn
+        except Exception as e:
+            conn.rollback()
+            raise e
     
     def _execute_with_retry(self, query_func, max_retries=3):
         """Execute a database operation with retry logic"""

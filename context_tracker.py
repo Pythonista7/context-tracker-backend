@@ -59,6 +59,10 @@ class ContextTracker:
             raise
     
     @property
+    def session(self) -> Session:
+        return self.session
+    
+    @property
     def current_context(self) -> ContextData:
         """Get current context with lazy initialization"""
         return self._current_context

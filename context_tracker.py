@@ -147,3 +147,12 @@ class ContextTracker:
             await asyncio.sleep(interval)
         
         logger.info(f"Ending session with id: {session_id} for context: {context.id} at {datetime.now()}")
+
+    async def initialize(self):
+        """Ensure the session is properly initialized"""
+        # Wait for session ID to be available
+        while self.session.session_id is None:
+            await asyncio.sleep(0.1)
+        
+        # Any other initialization needed
+        logger.info(f"Session {self.session.session_id} initialized")

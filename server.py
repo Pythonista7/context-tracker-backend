@@ -5,7 +5,10 @@ import asyncio
 from functools import wraps
 from logging import getLogger, basicConfig, INFO
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, Tuple
+import signal
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from context import Context
 from context_tracker import ContextTracker
@@ -23,10 +26,14 @@ basicConfig(
 logger = getLogger(__name__)
 
 app = Flask(__name__)
-# storage = ContextStorage()  # Create singleton instance
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
 
 # Add after app initialization
-active_trackers: Dict[int, ContextTracker] = {}
+active_trackers: Dict[int, Tuple[ContextTracker, asyncio.Task]] = {}
+
+# Create a thread pool for background tasks
+executor = ThreadPoolExecutor(max_workers=10)
 
 """
 API Request Models
@@ -51,8 +58,34 @@ def close_db(error):
 def async_route(f):
     @wraps(f)
     def wrapped(*args, **kwargs):
-        return asyncio.run(f(*args, **kwargs))
+        # Create a new event loop for each request
+        async_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(async_loop)
+        try:
+            return async_loop.run_until_complete(f(*args, **kwargs))
+        finally:
+            async_loop.close()
     return wrapped
+
+# Graceful shutdown handler
+def shutdown_handler(signum, frame):
+    logger.info("Received shutdown signal, cleaning up...")
+    
+    # Shutdown the thread pool
+    executor.shutdown(wait=True)
+    
+    # Clean up active trackers
+    for session_id, (tracker, future) in active_trackers.items():
+        logger.info(f"Ending session {session_id}")
+        if not tracker.session.ended_at:
+            loop.run_until_complete(tracker.session.end())
+    
+    # Close the main event loop
+    loop.close()
+
+# Register shutdown handlers
+signal.signal(signal.SIGINT, shutdown_handler)
+signal.signal(signal.SIGTERM, shutdown_handler)
 
 @app.route('/context', methods=['POST'])
 @async_route
@@ -82,18 +115,33 @@ async def start_session():
     if context is None:
         return jsonify({'error': 'Context not found'}), 404
 
-    # Start capture cycle in background
-    session: Session = Session(storage=storage, context_id=context.id)
-    tracker: ContextTracker = ContextTracker(context_storage=storage, context=context, session=session)
-    asyncio.create_task(tracker.run_capture_cycle(interval=15))
+    # Create tracker and session
+    session = Session(storage=storage, context_id=context.id)
+    tracker = ContextTracker(context_storage=storage, context=context, session=session)
     
-    # wait for session to start
-    while tracker.session.session_id is None:
-        logger.info("Waiting for session to start...")
-        await asyncio.sleep(1)
+    # Wait for session initialization
     
-    # Store tracker instance
-    active_trackers[tracker.session.session_id] = tracker
+    
+    # Start the capture cycle in a separate thread
+    def run_capture():
+        async_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(async_loop)
+        try:
+            # Create app context for the background thread
+            with app.app_context():
+                async_loop.run_until_complete(tracker.run_capture_cycle(interval=15))
+        except Exception as e:
+            logger.error(f"Capture cycle failed: {e}")
+        finally:
+            async_loop.close()
+    
+    # Submit the capture task to the thread pool
+    capture_future = executor.submit(run_capture)
+
+    await tracker.initialize()  # We need to wait for this to complete so that session_id is set
+
+    # Store tracker and future
+    active_trackers[tracker.session.session_id] = (tracker, capture_future)
     
     return jsonify({
         'session_id': tracker.session.session_id,
@@ -103,14 +151,23 @@ async def start_session():
 @app.route('/session/<session_id>/end', methods=['POST'])
 @async_route
 async def end_session_api(session_id):
-    # Get the active tracker instance
     session_id = int(session_id)
-    tracker = active_trackers.get(session_id)
-    if not tracker:
-        return jsonify({'error': f'Session {session_id} not found or already ended. Must be one of {active_trackers.keys()}'}), 404
+    tracker_tuple = active_trackers.get(session_id)
+    if not tracker_tuple:
+        return jsonify({'error': f'Session {session_id} not found or already ended'}), 404
+    
+    tracker, capture_task = tracker_tuple
     
     # End the session using the original tracker instance
     await tracker.session.end()
+    
+    # Cancel the background task
+    capture_task.cancel()
+    try:
+        await capture_task
+    except asyncio.CancelledError:
+        logger.error(f"Capture task for session {session_id} cancelled")
+        pass
     
     # Clean up the tracker reference
     del active_trackers[session_id]
@@ -153,8 +210,9 @@ async def get_session_events(session_id):
 @async_route
 async def get_session_status(session_id):
     # First check active trackers
-    tracker = active_trackers.get(session_id)
-    if tracker:
+    tracker_tuple = active_trackers.get(session_id)
+    if tracker_tuple:
+        tracker, _ = tracker_tuple
         return jsonify({
             'session_id': session_id,
             'status': 'active',
@@ -187,7 +245,7 @@ async def list_active_sessions():
         'context_id': tracker.current_context.id,
         'started_at': tracker.session.start_time.isoformat() if tracker.session.start_time else None,
         'name': tracker.current_context.name
-    } for session_id, tracker in active_trackers.items()]
+    } for session_id, (tracker, _) in active_trackers.items()]
     
     return jsonify({
         'active_sessions': active_sessions,
@@ -203,4 +261,4 @@ def health_check():
     })
 
 if __name__ == "__main__":
-    app.run(debug=True,port=5001) 
+    app.run(debug=False, port=5001)  # Set debug=False to avoid duplicate background tasks

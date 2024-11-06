@@ -161,13 +161,8 @@ async def end_session_api(session_id):
     # End the session using the original tracker instance
     await tracker.session.end()
     
-    # Cancel the background task
+    # Cancel the background task - note that we're using Future, not Task
     capture_task.cancel()
-    try:
-        await capture_task
-    except asyncio.CancelledError:
-        logger.error(f"Capture task for session {session_id} cancelled")
-        pass
     
     # Clean up the tracker reference
     del active_trackers[session_id]

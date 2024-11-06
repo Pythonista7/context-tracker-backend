@@ -194,6 +194,15 @@ async def get_session(session_id):
     
     return jsonify(session)
 
+
+@app.route('/session/<session_id>/summary', methods=['GET'])
+@async_route
+async def get_session_summary(session_id):
+    storage = ContextStorage()
+    session = Session(storage=storage, session_id=session_id)
+    summary = await session.generate_session_summary(session_id)
+    return jsonify(summary)
+
 @app.route('/session/<session_id>/events', methods=['GET'])
 @async_route
 async def get_session_events(session_id):

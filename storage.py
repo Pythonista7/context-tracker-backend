@@ -268,7 +268,7 @@ class ContextStorage:
                 UPDATE sessions 
                 SET end_time = ?, overview = ?, key_topics = ?, learning_highlights = ?, resources_used = ?, conclusion = ?
                 WHERE id = ?
-            """, (end_time, session_summary.overview, "\n".join(session_summary.key_topics), "\n".join(session_summary.learning_highlights), "".join(session_summary.resources_used), session_summary.conclusion, session_id))
+            """, (end_time, session_summary.overview, "\n".join(session_summary.key_topics), "\n".join(session_summary.learning_highlights), ",".join(session_summary.resources_used), session_summary.conclusion, session_id))
             conn.commit()
     
     def get_session(self, session_id: int) -> Optional[dict]:

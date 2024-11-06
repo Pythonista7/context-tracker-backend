@@ -77,7 +77,7 @@ def shutdown_handler(signum, frame):
     # Clean up active trackers
     for session_id, (tracker, future) in active_trackers.items():
         logger.info(f"Ending session {session_id}")
-        if not tracker.session.ended_at:
+        if not tracker.session.end_time:
             loop.run_until_complete(tracker.session.end())
     
     # Close the main event loop

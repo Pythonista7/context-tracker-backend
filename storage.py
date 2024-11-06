@@ -4,6 +4,9 @@ from pathlib import Path
 from typing import List, Optional
 from dataclasses import asdict
 import time
+from contextlib import contextmanager
+import queue
+from flask import current_app, g
 
 from constants import CONTEXT_PATH
 from data import ContextData, SessionSummary
@@ -12,37 +15,76 @@ from logging import getLogger
 logger = getLogger(__name__)
 
 class ContextStorage:
+    _instance = None
+    
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+    
     def __init__(self, db_path: str = f"{CONTEXT_PATH}/context.db"):
+        if self._initialized:
+            return
+            
         self.db_path = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.timeout = 30.0
+        
+        # Create a connection pool
+        self._pool = queue.Queue(maxsize=10)  # Limit to 10 connections
+        for _ in range(5):  # Start with 5 connections
+            self._pool.put(self._create_connection())
+            
         self._init_db()
-
-    def _get_connection(self):
-        """Get a database connection with proper timeout and settings"""
-        return sqlite3.connect(
+        self._initialized = True
+    
+    def _create_connection(self):
+        """Create a new database connection"""
+        conn = sqlite3.connect(
             self.db_path,
             timeout=self.timeout,
             isolation_level='IMMEDIATE',
-            check_same_thread=False
+            check_same_thread=False  # Allow cross-thread usage
         )
-
+        return conn
+    
+    def _get_connection(self):
+        """Get connection for current context/thread"""
+        if 'db' not in g:
+            g.db = sqlite3.connect(
+                self.db_path,
+                timeout=self.timeout,
+                isolation_level='IMMEDIATE'
+            )
+        return g.db
+    
+    @contextmanager
+    def get_connection(self):
+        """Context manager for database connections"""
+        conn = self._get_connection()
+        try:
+            yield conn
+        except Exception as e:
+            conn.rollback()
+            raise e
+    
     def _execute_with_retry(self, query_func, max_retries=3):
         """Execute a database operation with retry logic"""
         for attempt in range(max_retries):
             try:
-                with self._get_connection() as conn:
+                with self.get_connection() as conn:
                     return query_func(conn)
             except sqlite3.OperationalError as e:
                 if "database is locked" in str(e) and attempt < max_retries - 1:
                     logger.warning(f"Database locked, retrying... ({attempt + 1}/{max_retries})")
-                    time.sleep(0.1 * (attempt + 1))  # Exponential backoff
+                    time.sleep(0.1 * (attempt + 1))
                     continue
                 raise
             except Exception as e:
                 logger.error(f"Database error: {e}")
                 raise
-
+    
     def _init_db(self):
         """Initialize database tables if they don't exist"""
         with sqlite3.connect(self.db_path) as conn:
@@ -205,7 +247,7 @@ class ContextStorage:
 
     def create_session(self, context_id: str, start_time: datetime) -> int:
         """Create a new session with retry logic"""
-        def _create(conn):
+        def _create(conn) -> int:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO sessions (context_id, start_time)
@@ -226,7 +268,7 @@ class ContextStorage:
                 UPDATE sessions 
                 SET end_time = ?, overview = ?, key_topics = ?, learning_highlights = ?, resources_used = ?, conclusion = ?
                 WHERE id = ?
-            """, (end_time, session_summary.overview, session_summary.key_topics, session_summary.learning_highlights, session_summary.resources_used, session_summary.conclusion, session_id))
+            """, (end_time, session_summary.overview, "\n".join(session_summary.key_topics), "\n".join(session_summary.learning_highlights), "".join(session_summary.resources_used), session_summary.conclusion, session_id))
             conn.commit()
     
     def get_session(self, session_id: int) -> Optional[dict]:

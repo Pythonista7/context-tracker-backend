@@ -4,7 +4,7 @@ import json
 import os
 from pathlib import Path
 from typing import Dict, Optional, List
-from logging import getLogger
+from logging import getLogger, basicConfig, INFO, DEBUG
 from PIL import Image
 from constants import CONTEXT_PATH, OBSIDIAN_PATH
 from context import Context
@@ -19,6 +19,12 @@ from logging import getLogger
 from pydantic import BaseModel, Field, ValidationError
 
 from utils.utils import parse_json_string_to_model
+
+basicConfig(
+    level=INFO,  # Set to DEBUG to see all log messages
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 
 logger = getLogger(__name__)
 
@@ -76,7 +82,7 @@ class ContextTracker:
             result = await self.llm.analyze_image(image, prompt)
             result = ScreenCaptureData(**result)
             
-            logger.info(f"Screen analysis complete: {result.main_topic} - important:{result.is_learning_moment}")
+            logger.info(f"Session: {self.session.session_id} - Screen analysis complete: {result.main_topic} - important:{result.is_learning_moment}")
             return result
             
         except ValueError as e:
@@ -103,9 +109,11 @@ class ContextTracker:
             logger.error(f"Failed to persist context info: {e}")
             return
     
-    def start_session(self) -> Optional[int]:
+    async def start_session(self) -> int:
         """Start a new session and return its ID"""
-        return self.session.start()
+        new_session_id = await self.session.start()
+        print(f"Started session with id: {new_session_id} == {self.session.session_id}")
+        return new_session_id
     
     async def end_session(self) -> None:
         """End a session and optionally add a summary"""
@@ -118,8 +126,8 @@ class ContextTracker:
         if self.session is None:
             raise ValueError("Session is not set, please set a session before running capture cycle")
 
-        session_id = self.start_session()
-        logger.info(f"Started session with id: {session_id} for context: {context.id} at {datetime.now()}")
+        session_id = await self.start_session()
+        logger.info(f"Tracker started session with id: {session_id} for context: {context.id} at {datetime.now()}")
         
         while self.session.is_active():
             """Run one capture cycle"""

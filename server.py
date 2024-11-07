@@ -72,16 +72,21 @@ def shutdown_handler(signum, frame):
     logger.info("Received shutdown signal, cleaning up...")
     
     # Shutdown the thread pool
-    executor.shutdown(wait=True)
+    executor.shutdown(wait=True, cancel_futures=True)
     
     # Clean up active trackers
     for session_id, (tracker, future) in active_trackers.items():
         logger.info(f"Ending session {session_id}")
         if not tracker.session.end_time:
-            loop.run_until_complete(tracker.session.end())
+            # Create a new event loop for cleanup
+            cleanup_loop = asyncio.new_event_loop()
+            try:
+                cleanup_loop.run_until_complete(tracker.session.end())
+            finally:
+                cleanup_loop.close()
     
-    # Close the main event loop
-    loop.close()
+    # Exit the application
+    exit(0)
 
 # Register shutdown handlers
 signal.signal(signal.SIGINT, shutdown_handler)

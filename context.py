@@ -19,7 +19,7 @@ class Context():
         """Get a context by id or name"""
         return self.storage.get_context(context_id=id,name=name)
 
-    def create(self,name: str, id: Optional[int]=None, description: Optional[str]=None) -> ContextData:
+    def create(self,name: str, id: Optional[int]=None, description: Optional[str]="") -> ContextData:
         """Create a new context"""
         try:
             # Check if context already exists

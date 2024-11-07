@@ -100,7 +100,7 @@ async def create_context():
         return jsonify({'error': 'name is required'}), 400
     
     storage = ContextStorage()
-    context = Context(storage=storage).create(name=data.name, description=data.description)
+    context = Context(storage=storage).create(name=data.name, description=data.description or "")
     return jsonify({
         'context_id': context.id,
         'name': context.name

@@ -105,6 +105,21 @@ async def create_context():
         'context_id': context.id,
         'name': context.name
     })
+    
+@app.route('/context/list', methods=['GET'])
+@async_route
+async def list_contexts():
+    storage = ContextStorage()
+    contexts = storage.get_recent_contexts()
+    return_contexts = []
+    for ctx in contexts:
+        return_contexts.append({
+            'context_id': ctx.id,
+            'name': ctx.name,
+            'last_active': ctx.last_active,
+            'color': ctx.color
+        })
+    return jsonify(return_contexts)
 
 @app.route('/session', methods=['POST'])
 @async_route

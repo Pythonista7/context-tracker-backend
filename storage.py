@@ -223,12 +223,12 @@ class ContextStorage:
                 last_active = datetime.fromisoformat(context_row[4]),  
             )
 
-    def get_all_contexts(self) -> List[dict]:
+    def get_recent_contexts(self) -> List[dict]:
         """Retrieve all contexts"""
         contexts = []
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id FROM contexts")
+            cursor.execute("SELECT id FROM contexts ORDER BY last_active DESC LIMIT 5;")
             context_ids = cursor.fetchall()
             
             for (context_id,) in context_ids:

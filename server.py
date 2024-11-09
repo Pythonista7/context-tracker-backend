@@ -1,5 +1,5 @@
 from datetime import datetime
-from flask import Flask, jsonify, request, g
+from flask import Flask, Response, jsonify, request, g
 import json
 import asyncio
 from functools import wraps
@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from context import Context
 from context_tracker import ContextTracker
-from data import ContextData
+from data import ContextData, SessionData
 from session import Session
 from storage import ContextStorage
 
@@ -165,7 +165,8 @@ async def start_session():
     
     return jsonify({
         'session_id': tracker.session.session_id,
-        'context_id': data.context_id
+        'context_id': data.context_id,
+        'start_time': tracker.session.start_time.isoformat() if tracker.session.start_time else datetime.now().isoformat()
     })
 
 @app.route('/session/<session_id>/end', methods=['POST'])
@@ -202,6 +203,14 @@ async def end_session_api(session_id):
         }
     })
 
+@app.route('/session/<session_id>/md',methods = ['POST'])
+@async_route
+async def get_session_markdown(session_id,instruction:str):
+    storage = ContextStorage()
+    session = Session(storage=storage, session_id=session_id)
+    markdown = await session.instruct_generate_session_markdown(session_id,instruction)
+    return Response(markdown, mimetype='text/markdown')
+
 @app.route('/session/<session_id>', methods=['GET'])
 @async_route
 async def get_session(session_id):
@@ -211,8 +220,8 @@ async def get_session(session_id):
     session = storage.get_session(session_id)
     if not session:
         return jsonify({'error': 'Session not found'}), 404
-    
-    return jsonify(session)
+    session_data = SessionData.from_db_row(session)
+    return jsonify(session_data.model_dump())
 
 
 @app.route('/session/<session_id>/summary', methods=['GET'])
@@ -241,7 +250,7 @@ async def get_session_status(session_id):
             'session_id': session_id,
             'status': 'active',
             'context_id': tracker.current_context.id,
-            'started_at': tracker.session.started_at.isoformat() if tracker.session.started_at else None
+            'start_time': tracker.session.started_at.isoformat() if tracker.session.started_at else None
         })
     
     # If not active, check storage for completed session
@@ -253,10 +262,10 @@ async def get_session_status(session_id):
             'session_id': session_id,
             'status': 'completed',
             'context_id': session_data[1],  # Assuming context_id is second column
-            'started_at': session_data[2],  # Assuming started_at is third column
-            'ended_at': session_data[3]     # Assuming ended_at is fourth column
+            'start_time': session_data[2],  # Assuming started_at is third column
+            'end_time': session_data[3]     # Assuming ended_at is fourth column
         })
-    
+
     return jsonify({
         'error': 'Session not found'
     }), 404
@@ -267,10 +276,10 @@ async def list_active_sessions():
     active_sessions = [{
         'session_id': session_id,
         'context_id': tracker.current_context.id,
-        'started_at': tracker.session.start_time.isoformat() if tracker.session.start_time else None,
+        'start_time': tracker.session.start_time.isoformat() if tracker.session.start_time else None,
         'name': tracker.current_context.name
     } for session_id, (tracker, _) in active_trackers.items()]
-    
+
     return jsonify({
         'active_sessions': active_sessions,
         'count': len(active_sessions)

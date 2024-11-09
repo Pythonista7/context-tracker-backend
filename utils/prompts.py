@@ -111,6 +111,55 @@ Remember to base your summary solely on the information provided in the events d
 Return the required information EXACTLY as mentioned below and format it as JSON with these exact keys, do not wrap it in any markdown block, tags or any other text, just the JSON:
 {generate_schema_description(SessionSummary)}
 """
+    ),
+
+    "session_md" : AnalysisPrompt(
+        system_context="",
+        template=f"""
+        You are tasked with generating a meaningful markdown file from a set of events recording details about the activity performed on a system. These activity details are generated from screenshots taken periodically, approximately every 15-30 seconds. Your goal is to create a well-structured document that summarizes this activity in a clear and organized manner.
+
+First, you will be provided with the activity events data:
+
+<activity_events>
+{{EVENTS_DATA}}
+</activity_events>
+
+Next, you will receive any custom user instructions:
+
+<user_instructions>
+{{instruction}}
+</user_instructions>
+
+Follow these steps to generate the markdown file:
+
+1. Begin with a title and brief introduction explaining the purpose of the document.
+
+2. Create sections for different types of activities or time periods, depending on the nature of the events. Use appropriate markdown headers (##, ###, etc.) to structure these sections.
+
+3. Within each section, summarize the activities chronologically. Use bullet points or numbered lists where appropriate.
+
+4. Include relevant details such as application names, file names, or websites visited, but be mindful of potential sensitive information.
+
+5. If the activity spans a long period, consider adding timestamps or time ranges to provide context.
+
+6. Where applicable, group similar activities together and provide a brief summary of the overall task or goal.
+
+7. If there are periods of inactivity or breaks, note these as well.
+
+8. Incorporate any custom instructions provided by the user in the <user_instructions>. These may include specific formatting requests, additional details to include, or particular focus areas.
+
+9. Conclude the document with a brief summary of the overall activity period.
+
+10. Use markdown formatting to enhance readability. This may include:
+   - Bold or italic text for emphasis
+   - Code blocks for any command-line activities or code snippets
+   - Horizontal rules to separate major sections
+   - Tables if presenting structured data
+
+11. If appropriate, consider adding a high-level overview at the beginning of the document, such as total active time, main applications used, or primary tasks accomplished.
+
+Return ONLY the markdown content, do not wrap it in any markdown block, tags or any other text, just the markdown content.
+"""
     )
 }
 

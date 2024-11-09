@@ -113,6 +113,22 @@ class Session:
         except Exception as e:
             logger.error(f"[Session {self.session_id}] Failed to generate session summary: {e}")
             raise
+    
+    async def instruct_generate_session_markdown(self, session_id: int, instruction: str) -> str:
+        """
+        Generate Markdown based on provided instructions.
+        """
+        events = self.storage.get_session_events(session_id)
+        session_md_prompt = self.prompts.get_prompt("session_md").format(
+            EVENTS_DATA = events,
+            session_id = session_id,
+            instruction = instruction
+        )
+        session_md = await self.llm.generate_text(
+            prompt=session_md_prompt.template,
+            system_context=session_md_prompt.system_context
+        )
+        return session_md
 
     # async def __aenter__(self) -> 'Session':
     #     await self.start()

@@ -2,7 +2,7 @@
 
 || [Blog Post](https://open.substack.com/pub/ashwinmirskar/p/context-tracker-ai?r=b1eef&utm_campaign=post&utm_medium=web) || [Demo Video](https://youtu.be/CuOoXqdsD_w?si=nCknNQvhwroWAdGf) ||
 
-This repository contains a context tracking system that captures screen activity, analyzes it using LLM providers, and stores the context data for further analysis. The system is designed to help users track their activities and generate summaries of their sessions.
+This repository contains a context tracking system that captures screen activity, analyzes it using LLM providers, and stores the context data for further analysis. The system is designed to help users track their activities and generate summaries of their sessions. Checkout the Raycast plugin [here](https://github.com/Pythonista7/context-tracker).
 
 
 

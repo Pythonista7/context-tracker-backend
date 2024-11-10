@@ -1,4 +1,5 @@
 # Context Tracker
+[![alt text](image.png)](https://youtu.be/CuOoXqdsD_w?si=nCknNQvhwroWAdGf)
 
 || [Blog Post](https://open.substack.com/pub/ashwinmirskar/p/context-tracker-ai?r=b1eef&utm_campaign=post&utm_medium=web) || [Demo Video](https://youtu.be/CuOoXqdsD_w?si=nCknNQvhwroWAdGf) ||
 

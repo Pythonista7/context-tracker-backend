@@ -1,11 +1,12 @@
 from datetime import datetime
 import asyncio
+import json
 import os
 from typing import Dict, Optional
 
 import logging
 
-from data import SessionSummary
+from data import SessionMD, SessionSummary
 from llm_providers.openai_provider import OpenAIProvider
 from storage import ContextStorage
 from utils.llm_types import AnalysisPrompt, LLMProvider
@@ -114,7 +115,7 @@ class Session:
             logger.error(f"[Session {self.session_id}] Failed to generate session summary: {e}")
             raise
     
-    async def instruct_generate_session_markdown(self, session_id: int, instruction: str) -> str:
+    async def instruct_generate_session_markdown(self, session_id: int, instruction: str) -> SessionMD:
         """
         Generate Markdown based on provided instructions.
         """
@@ -122,12 +123,20 @@ class Session:
         session_md_prompt = self.prompts.get_prompt("session_md").format(
             EVENTS_DATA = events,
             session_id = session_id,
-            instruction = instruction
+            instruction = instruction,
         )
-        session_md = await self.llm.generate_text(
+        session_md_raw = await self.llm.generate_text(
             prompt=session_md_prompt.template,
             system_context=session_md_prompt.system_context
         )
+        
+        logger.info(f"[Session {self.session_id}] Generated session markdown raw: {session_md_raw}")
+        
+        # Extract first line from the generated markdown as the name of the session
+        session_name = session_md_raw.split("\n")[0].replace("#", "").strip()
+        
+        session_md = SessionMD(session_id=session_id, name=session_name, markdown=session_md_raw)
+        session_md.session_id = int(session_id)
         return session_md
 
     # async def __aenter__(self) -> 'Session':

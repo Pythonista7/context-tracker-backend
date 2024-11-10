@@ -1,8 +1,9 @@
+import json
 from typing import Dict, Type
 
 from pydantic import BaseModel
 
-from data import ScreenCaptureData, SessionSummary
+from data import ScreenCaptureData, SessionMD, SessionSummary
 from utils.llm_types import AnalysisPrompt
 
 def generate_schema_description(model: Type[BaseModel]) -> str:
@@ -116,7 +117,7 @@ Return the required information EXACTLY as mentioned below and format it as JSON
     "session_md" : AnalysisPrompt(
         system_context="",
         template=f"""
-        You are tasked with generating a meaningful markdown file from a set of events recording details about the activity performed on a system. These activity details are generated from screenshots taken periodically, approximately every 15-30 seconds. Your goal is to create a well-structured document that summarizes this activity in a clear and organized manner.
+You are tasked with generating a meaningful markdown file from a set of events recording details about the activity performed on a system. These activity details are generated from screenshots taken periodically, approximately every 15-30 seconds. Your goal is to create a well-structured document that summarizes this activity in a clear and organized manner.
 
 First, you will be provided with the activity events data:
 
@@ -130,7 +131,7 @@ Next, you will receive any custom user instructions:
 {{instruction}}
 </user_instructions>
 
-Follow these steps to generate the markdown file:
+Follow these steps to generate the markdown:
 
 1. Begin with a title and brief introduction explaining the purpose of the document.
 
@@ -158,9 +159,11 @@ Follow these steps to generate the markdown file:
 
 11. If appropriate, consider adding a high-level overview at the beginning of the document, such as total active time, main applications used, or primary tasks accomplished.
 
-Return ONLY the markdown content, do not wrap it in any markdown block, tags or any other text, just the markdown content.
+Always generate a valid markdown without any syntax errors. Ensure that the document is well-organized, easy to read, and accurately reflects the activity recorded in the events data in a concise manner.
+Do not wrap the markdown in any additional text or tags, just the markdown content. Note that the markdown content must ALWAYS be a string and 
+start with a H1 title on the very first line, followed by the content. Make sure that the Title is short and specific to the content and not something very generic like "Log of events" or "Summary Report" etc, make it descriptive of the actual contents like "Exploring Llama models" , "Learning Raycast Apis" etc.
 """
-    )
+)
 }
 
 

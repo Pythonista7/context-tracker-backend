@@ -1,4 +1,5 @@
 from datetime import datetime
+import os
 from flask import Flask, Response, jsonify, request, g
 import json
 import asyncio
@@ -10,6 +11,7 @@ import signal
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+from constants import OBSIDIAN_PATH
 from context import Context
 from context_tracker import ContextTracker
 from data import ContextData, SessionData
@@ -171,7 +173,7 @@ async def start_session():
 
 @app.route('/session/<session_id>/end', methods=['POST'])
 @async_route
-async def end_session_api(session_id):
+async def end_session_api(session_id: int):
     session_id = int(session_id)
     tracker_tuple = active_trackers.get(session_id)
     if not tracker_tuple:
@@ -203,13 +205,35 @@ async def end_session_api(session_id):
         }
     })
 
-@app.route('/session/<session_id>/md',methods = ['POST'])
+@app.route('/session/<session_id>/save',methods = ['POST'])
 @async_route
-async def get_session_markdown(session_id,instruction:str):
+async def get_session_markdown(session_id):
+    instruction = request.json.get('instruction', '')
     storage = ContextStorage()
-    session = Session(storage=storage, session_id=session_id)
+    session_row = storage.get_session(session_id)
+    if not session_row:
+        return jsonify({'error': 'Session not found'}), 404
+    context_id = storage.get_session(session_id)[1]
+    context = Context(storage=storage).get(id=context_id)
+    session = Session(storage=storage, session_id=session_id, context_id=context_id)
+    
     markdown = await session.instruct_generate_session_markdown(session_id,instruction)
-    return Response(markdown, mimetype='text/markdown')
+    
+    context = Context(storage=storage).get(id=context_id)
+    
+    # save to a md file in the obsidian vault
+    dir_path = OBSIDIAN_PATH / context.name
+    file_name = f"session-{session_id}-{markdown.name}.md"
+    md_path = os.path.join(dir_path, file_name)
+    # Create directory if it doesn't exist
+    os.makedirs(dir_path, exist_ok=True)
+    with open(md_path, "w") as f:
+        f.write(markdown.markdown)
+    logger.info(f"Saved session {session_id} markdown to {md_path}")
+    response_data = markdown.model_dump()
+    response_data['session_id'] = int(response_data['session_id'])
+
+    return jsonify({**response_data,"path":md_path})
 
 @app.route('/session/<session_id>', methods=['GET'])
 @async_route
@@ -228,9 +252,12 @@ async def get_session(session_id):
 @async_route
 async def get_session_summary(session_id):
     storage = ContextStorage()
-    session = Session(storage=storage, session_id=session_id)
+    session_row = storage.get_session(session_id)
+    if not session_row:
+        return jsonify({'error': 'Session not found'}), 404
+    session = Session(storage=storage, session_id=session_id, context_id=session_row[1])
     summary = await session.generate_session_summary(session_id)
-    return jsonify(summary)
+    return jsonify(summary.model_dump())
 
 @app.route('/session/<session_id>/events', methods=['GET'])
 @async_route

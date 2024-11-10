@@ -223,12 +223,12 @@ class ContextStorage:
                 last_active = datetime.fromisoformat(context_row[4]),  
             )
 
-    def get_all_contexts(self) -> List[dict]:
+    def get_recent_contexts(self) -> List[dict]:
         """Retrieve all contexts"""
         contexts = []
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id FROM contexts")
+            cursor.execute("SELECT id FROM contexts ORDER BY last_active DESC LIMIT 5;")
             context_ids = cursor.fetchall()
             
             for (context_id,) in context_ids:
@@ -268,7 +268,7 @@ class ContextStorage:
                 UPDATE sessions 
                 SET end_time = ?, overview = ?, key_topics = ?, learning_highlights = ?, resources_used = ?, conclusion = ?
                 WHERE id = ?
-            """, (end_time, session_summary.overview, "\n".join(session_summary.key_topics), "\n".join(session_summary.learning_highlights), ",".join(session_summary.resources_used), session_summary.conclusion, session_id))
+            """, (end_time, session_summary.overview, "\n".join(session_summary.key_topics), "\n".join(session_summary.learning_highlights), "\n".join(session_summary.resources_used), session_summary.conclusion, session_id))
             conn.commit()
     
     def get_session(self, session_id: int) -> Optional[dict]:

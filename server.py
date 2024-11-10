@@ -1,5 +1,6 @@
 from datetime import datetime
-from flask import Flask, jsonify, request, g
+import os
+from flask import Flask, Response, jsonify, request, g
 import json
 import asyncio
 from functools import wraps
@@ -10,9 +11,10 @@ import signal
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+from constants import OBSIDIAN_PATH
 from context import Context
 from context_tracker import ContextTracker
-from data import ContextData
+from data import ContextData, SessionData
 from session import Session
 from storage import ContextStorage
 
@@ -105,6 +107,21 @@ async def create_context():
         'context_id': context.id,
         'name': context.name
     })
+    
+@app.route('/context/list', methods=['GET'])
+@async_route
+async def list_contexts():
+    storage = ContextStorage()
+    contexts = storage.get_recent_contexts()
+    return_contexts = []
+    for ctx in contexts:
+        return_contexts.append({
+            'context_id': ctx.id,
+            'name': ctx.name,
+            'last_active': ctx.last_active,
+            'color': ctx.color
+        })
+    return jsonify(return_contexts)
 
 @app.route('/session', methods=['POST'])
 @async_route
@@ -150,12 +167,13 @@ async def start_session():
     
     return jsonify({
         'session_id': tracker.session.session_id,
-        'context_id': data.context_id
+        'context_id': data.context_id,
+        'start_time': tracker.session.start_time.isoformat() if tracker.session.start_time else datetime.now().isoformat()
     })
 
 @app.route('/session/<session_id>/end', methods=['POST'])
 @async_route
-async def end_session_api(session_id):
+async def end_session_api(session_id: int):
     session_id = int(session_id)
     tracker_tuple = active_trackers.get(session_id)
     if not tracker_tuple:
@@ -187,6 +205,36 @@ async def end_session_api(session_id):
         }
     })
 
+@app.route('/session/<session_id>/save',methods = ['POST'])
+@async_route
+async def get_session_markdown(session_id):
+    instruction = request.json.get('instruction', '')
+    storage = ContextStorage()
+    session_row = storage.get_session(session_id)
+    if not session_row:
+        return jsonify({'error': 'Session not found'}), 404
+    context_id = storage.get_session(session_id)[1]
+    context = Context(storage=storage).get(id=context_id)
+    session = Session(storage=storage, session_id=session_id, context_id=context_id)
+    
+    markdown = await session.instruct_generate_session_markdown(session_id,instruction)
+    
+    context = Context(storage=storage).get(id=context_id)
+    
+    # save to a md file in the obsidian vault
+    dir_path = OBSIDIAN_PATH / context.name
+    file_name = f"session-{session_id}-{markdown.name}.md"
+    md_path = os.path.join(dir_path, file_name)
+    # Create directory if it doesn't exist
+    os.makedirs(dir_path, exist_ok=True)
+    with open(md_path, "w") as f:
+        f.write(markdown.markdown)
+    logger.info(f"Saved session {session_id} markdown to {md_path}")
+    response_data = markdown.model_dump()
+    response_data['session_id'] = int(response_data['session_id'])
+
+    return jsonify({**response_data,"path":md_path})
+
 @app.route('/session/<session_id>', methods=['GET'])
 @async_route
 async def get_session(session_id):
@@ -196,17 +244,20 @@ async def get_session(session_id):
     session = storage.get_session(session_id)
     if not session:
         return jsonify({'error': 'Session not found'}), 404
-    
-    return jsonify(session)
+    session_data = SessionData.from_db_row(session)
+    return jsonify(session_data.model_dump())
 
 
 @app.route('/session/<session_id>/summary', methods=['GET'])
 @async_route
 async def get_session_summary(session_id):
     storage = ContextStorage()
-    session = Session(storage=storage, session_id=session_id)
+    session_row = storage.get_session(session_id)
+    if not session_row:
+        return jsonify({'error': 'Session not found'}), 404
+    session = Session(storage=storage, session_id=session_id, context_id=session_row[1])
     summary = await session.generate_session_summary(session_id)
-    return jsonify(summary)
+    return jsonify(summary.model_dump())
 
 @app.route('/session/<session_id>/events', methods=['GET'])
 @async_route
@@ -226,7 +277,7 @@ async def get_session_status(session_id):
             'session_id': session_id,
             'status': 'active',
             'context_id': tracker.current_context.id,
-            'started_at': tracker.session.started_at.isoformat() if tracker.session.started_at else None
+            'start_time': tracker.session.started_at.isoformat() if tracker.session.started_at else None
         })
     
     # If not active, check storage for completed session
@@ -238,10 +289,10 @@ async def get_session_status(session_id):
             'session_id': session_id,
             'status': 'completed',
             'context_id': session_data[1],  # Assuming context_id is second column
-            'started_at': session_data[2],  # Assuming started_at is third column
-            'ended_at': session_data[3]     # Assuming ended_at is fourth column
+            'start_time': session_data[2],  # Assuming started_at is third column
+            'end_time': session_data[3]     # Assuming ended_at is fourth column
         })
-    
+
     return jsonify({
         'error': 'Session not found'
     }), 404
@@ -252,10 +303,10 @@ async def list_active_sessions():
     active_sessions = [{
         'session_id': session_id,
         'context_id': tracker.current_context.id,
-        'started_at': tracker.session.start_time.isoformat() if tracker.session.start_time else None,
+        'start_time': tracker.session.start_time.isoformat() if tracker.session.start_time else None,
         'name': tracker.current_context.name
     } for session_id, (tracker, _) in active_trackers.items()]
-    
+
     return jsonify({
         'active_sessions': active_sessions,
         'count': len(active_sessions)
